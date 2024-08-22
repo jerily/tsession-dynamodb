@@ -4,6 +4,7 @@
 
 package provide tsession-dynamodb 1.0.0
 
-set dir [file dirname [info script]]
+package require tsession
 
+set dir [file dirname [info script]]
 source [file join ${dir} dynamodbstore.tcl]

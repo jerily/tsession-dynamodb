@@ -10,7 +10,6 @@ namespace eval ::tsession::dynamodbstore {
 
     proc init {config_dict} {
         package require awsdynamodb
-        package require tjson
 
         variable dynamodb_client
         variable config

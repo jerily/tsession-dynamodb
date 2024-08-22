@@ -5,8 +5,8 @@
     "localstack-deploy-infra": "awslocal cloudformation deploy --template-file $PROJECT_HOME/infra/infra.yml --stack-name MyStack"
   },
   "dependencies": {
-    "tsession": "^1.0.2",
-    "aws-sdk-tcl": "^1.0.10"
+    "aws-sdk-tcl": "^1.0.10",
+    "tsession": "^1.0.2"
   },
   "devDependencies": {
 

@@ -3,7 +3,7 @@ package require twebserver
 set init_script {
     package require twebserver
     package require tink
-    package require tsession
+    package require tsession-dynamodb
 
     set hmac_keyset {{
         "primaryKeyId": 691856985,
@@ -95,8 +95,6 @@ set config_dict [dict create \
     gzip_types [list text/plain application/json] \
     gzip_min_length 20]
 set server_handle [::twebserver::create_server -with_router $config_dict process_conn $init_script]
-::twebserver::add_context $server_handle localhost [file join $dir "../certs/host1/key.pem"] [file join $dir "../certs/host1/cert.pem"]
-::twebserver::listen_server $server_handle 4433
 ::twebserver::listen_server $server_handle -http 8080
 
 puts "Server running on https://localhost:4433 and http://localhost:8080"

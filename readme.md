@@ -4,7 +4,7 @@ DynamoDB store interface for [tsession](https://github.com/jerily/tsession).
 
 ## Prerequisites
 
-- [tsession](https://github.com/jerily/tsession) (version 1.0.2 and above)
+- [tsession](https://github.com/jerily/tsession) (version 1.0.3 and above)
 - [aws-sdk-tcl](https://github.com/jerily/aws-sdk-tcl) (version 1.0.10 and above)
 
 ## Installation

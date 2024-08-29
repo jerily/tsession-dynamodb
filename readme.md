@@ -1,6 +1,6 @@
 # tsession-dynamodb store
 
-DynamoDB store for [tsession](https://github.com/jerily/tsession).
+DynamoDB store interface for [tsession](https://github.com/jerily/tsession).
 
 ## Prerequisites
 

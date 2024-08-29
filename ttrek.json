@@ -6,7 +6,7 @@
   },
   "dependencies": {
     "aws-sdk-tcl": "^1.0.10",
-    "tsession": "^1.0.2"
+    "tsession": "^1.0.3"
   },
   "devDependencies": {
 

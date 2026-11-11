@@ -2,7 +2,7 @@ ifndef PREFIX
     PREFIX  = /usr/local
 endif
 
-VERSION = 1.0.0
+VERSION = 2.0.0
 INSTALLDIR=${PREFIX}/lib/tsession-dynamodb${VERSION}
 
 install:

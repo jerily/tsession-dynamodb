@@ -2,17 +2,21 @@ AWSTemplateFormatVersion: "2010-09-09"
 
 Resources:
 
-  SessionsDynamoDBTable:
+  SessionsV2DynamoDBTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: Sessions
+      TableName: SessionsV2
       BillingMode: "PAY_PER_REQUEST"
       AttributeDefinitions:
-        - AttributeName: session_id
+        - AttributeName: tenant
+          AttributeType: S
+        - AttributeName: id
           AttributeType: S
       KeySchema:
-        - AttributeName: session_id
+        - AttributeName: tenant
           KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
       TimeToLiveSpecification:
         AttributeName: expires
         Enabled: true

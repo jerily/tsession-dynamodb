@@ -1,0 +1,167 @@
+package require tcltest 2
+namespace import ::tcltest::*
+package require tsession-dynamodb 2.0.0
+namespace eval ::storetest {variable serial 0; variable hook {}; variable on get_item}
+testConstraint backend [info exists ::env(TSESSION_TEST_DYNAMODB)]
+if {[testConstraint backend]} {
+    if {![regexp {^http://(localhost|127\.0\.0\.1):[0-9]+$} $::env(TSESSION_TEST_DYNAMODB)]} {
+        error "TSESSION_TEST_DYNAMODB must be a loopback HTTP endpoint"
+    }
+    set ::storetest::client [::aws::dynamodb::create [dict create region us-east-1 \
+        endpoint $::env(TSESSION_TEST_DYNAMODB) aws_access_key_id test aws_secret_access_key test]]
+    set ::storetest::table tsession-test-[pid]-[clock microseconds]
+    $::storetest::client create_table $::storetest::table {tenant {S HASH} id {S RANGE}}
+}
+proc ::storetest::setup {} {
+    variable serial
+    variable client
+    variable table
+    variable a
+    variable b
+    variable hook {}
+    variable on get_item
+    set tenant test-[incr serial]
+    set a [::tsession::dynamodb::create -client $client -table $table -tenant $tenant-a]
+    set b [::tsession::dynamodb::create -client $client -table $table -tenant $tenant-b]
+}
+proc ::storetest::data {} {
+    dict create expires [expr {[clock seconds]+3600}] note {Zoë 世界 [error never-evaluate]; $variable} nested {a {b c}} nul "a\0b"
+}
+# Interleave a real write immediately after a read, or just before a delete.
+proc ::storetest::proxy {method args} {
+    variable client
+    variable hook
+    variable on
+    if {$method eq $on && $hook ne {}} {
+        set script $hook
+        set hook {}
+        if {$method eq "get_item"} {
+            set result [$client $method {*}$args]
+            uplevel #0 $script
+            return $result
+        }
+        uplevel #0 $script
+    }
+    return [$client $method {*}$args]
+}
+proc ::storetest::interleave {script {method get_item}} {
+    variable hook $script
+    variable on $method
+    dict replace $::storetest::a client ::storetest::proxy
+}
+
+test store-1 {round trip preserves arbitrary data and tenant isolation} -constraints backend -setup {::storetest::setup} -body {
+    set id "id; \[error no\] 世界\0"
+    set data [::storetest::data]
+    ::tsession::dynamodb::insert $::storetest::a $id $data alice
+    ::tsession::dynamodb::insert $::storetest::b $id [dict replace $data note other] alice
+    list [expr {[::tsession::dynamodb::get $::storetest::a $id] eq [dict replace $data id $id]}] \
+        [dict get [::tsession::dynamodb::get $::storetest::b $id] note] \
+        [::tsession::dynamodb::get $::storetest::a missing]
+} -result {1 other {}}
+
+test store-2 {duplicate insert fails without overwriting} -constraints backend -setup {::storetest::setup} -body {
+    ::tsession::dynamodb::insert $::storetest::a id [::storetest::data]
+    catch {::tsession::dynamodb::insert $::storetest::a id [dict replace [::storetest::data] note changed]} msg opts
+    list [dict get $opts -errorcode] [dict get [::tsession::dynamodb::get $::storetest::a id] note]
+} -result {{AWS DynamoDB ConditionalCheckFailedException} {Zoë 世界 [error never-evaluate]; $variable}}
+
+test store-3 {expiry boundary, updates, deletion and missing records} -constraints backend -setup {::storetest::setup} -body {
+    ::tsession::dynamodb::insert $::storetest::a old [dict create expires [clock seconds]]
+    ::tsession::dynamodb::insert $::storetest::a live [::storetest::data]
+    list [::tsession::dynamodb::get $::storetest::a old] \
+        [::tsession::dynamodb::update $::storetest::a old [::storetest::data]] \
+        [::tsession::dynamodb::update $::storetest::a live {note changed}] \
+        [dict get [::tsession::dynamodb::get $::storetest::a live] note] \
+        [::tsession::dynamodb::delete $::storetest::a live] [::tsession::dynamodb::delete $::storetest::a live] \
+        [::tsession::dynamodb::update $::storetest::a live [::storetest::data]]
+} -result {{} 0 1 changed 1 0 0}
+
+test store-4 {revocation scopes subject to tenant and keeps subject immutable} -constraints backend -setup {::storetest::setup} -body {
+    foreach id {one two} {::tsession::dynamodb::insert $::storetest::a $id [::storetest::data] alice}
+    ::tsession::dynamodb::insert $::storetest::a three [::storetest::data] bob
+    ::tsession::dynamodb::insert $::storetest::b one [::storetest::data] alice
+    ::tsession::dynamodb::update $::storetest::a one {subject bob}
+    list [::tsession::dynamodb::revoke $::storetest::a alice] \
+        [::tsession::dynamodb::get $::storetest::a one] \
+        [expr {[::tsession::dynamodb::get $::storetest::a three] ne {}}] \
+        [expr {[::tsession::dynamodb::get $::storetest::b one] ne {}}]
+} -result {2 {} 1 1}
+
+test store-5 {prune only expired records of this tenant} -constraints backend -setup {::storetest::setup} -body {
+    foreach store [list $::storetest::a $::storetest::b] {
+        ::tsession::dynamodb::insert $store old {expires 0}
+        ::tsession::dynamodb::insert $store live [::storetest::data]
+    }
+    list [::tsession::dynamodb::prune $::storetest::a] [::tsession::dynamodb::prune $::storetest::a] \
+        [::tsession::dynamodb::prune $::storetest::b] [expr {[::tsession::dynamodb::get $::storetest::a live] ne {}}]
+} -result {1 0 1 1}
+
+test store-6 {stale update cannot overwrite another worker} -constraints backend -setup {::storetest::setup} -body {
+    ::tsession::dynamodb::insert $::storetest::a id [::storetest::data]
+    set store [::storetest::interleave {::tsession::dynamodb::update $::storetest::a id {note winner}}]
+    list [::tsession::dynamodb::update $store id {note loser}] [dict get [::tsession::dynamodb::get $store id] note]
+} -result {0 winner}
+
+test store-7 {stale update cannot revive a revoked session} -constraints backend -setup {::storetest::setup} -body {
+    ::tsession::dynamodb::insert $::storetest::a id [::storetest::data] alice
+    set store [::storetest::interleave {::tsession::dynamodb::revoke $::storetest::a alice}]
+    list [::tsession::dynamodb::update $store id {note stale}] [::tsession::dynamodb::get $store id]
+} -result {0 {}}
+
+test store-8 {expiry is checked again at write time} -constraints backend -setup {::storetest::setup} -body {
+    ::tsession::dynamodb::insert $::storetest::a id [::storetest::data]
+    set store [::storetest::interleave {
+        $::storetest::client put_item $::storetest::table [::tsession::dynamodb::item $::storetest::a id {expires 0} {} 0]
+    }]
+    list [::tsession::dynamodb::update $store id [::storetest::data]] [::tsession::dynamodb::get $store id]
+} -result {0 {}}
+
+test store-9 {validation rejects empty ids, invalid data and options} -constraints backend -setup {::storetest::setup} -body {
+    ::tsession::dynamodb::insert $::storetest::a id [::storetest::data]
+    list [catch {::tsession::dynamodb::get $::storetest::a {}}] \
+        [catch {::tsession::dynamodb::insert $::storetest::a bad {expires never}}] \
+        [catch {::tsession::dynamodb::update $::storetest::a id {id another}}] \
+        [catch {::tsession::dynamodb::update $::storetest::a id {expires never}}] \
+        [catch {::tsession::dynamodb::revoke $::storetest::a {}}] \
+        [catch {::tsession::dynamodb::create -client $::storetest::client -table SessionsV2}] \
+        [catch {::tsession::dynamodb::create -client nonexistent -table SessionsV2 -tenant a}] \
+        [catch {::tsession::dynamodb::create -unknown value}] \
+        [catch {::tsession::dynamodb::create -client}] \
+        [catch {::tsession::dynamodb::insert $::storetest::a [string repeat x 513] [::storetest::data]}]
+} -result {1 1 1 1 1 1 1 1 1 1}
+
+test store-10 {a second client reads committed data} -constraints backend -setup {::storetest::setup} -body {
+    ::tsession::dynamodb::insert $::storetest::a id [::storetest::data]
+    set client [::aws::dynamodb::create [dict create region us-east-1 endpoint $::env(TSESSION_TEST_DYNAMODB) \
+        aws_access_key_id test aws_secret_access_key test]]
+    try {
+        dict get [::tsession::dynamodb::get [dict replace $::storetest::a client $client] id] note
+    } finally {$client destroy}
+} -result {Zoë 世界 [error never-evaluate]; $variable}
+
+test store-11 {revoke follows pages past DynamoDB's 1 MB query limit} -constraints backend -setup {::storetest::setup} -body {
+    set data [dict create expires [expr {[clock seconds]+3600}] payload [string repeat x 200000]]
+    for {set i 0} {$i < 6} {incr i} {::tsession::dynamodb::insert $::storetest::a id-$i $data alice}
+    list [::tsession::dynamodb::revoke $::storetest::a alice] [::tsession::dynamodb::revoke $::storetest::a alice]
+} -result {6 0}
+
+test store-12 {prune does not delete a record whose expiry changed after querying} -constraints backend -setup {::storetest::setup} -body {
+    ::tsession::dynamodb::insert $::storetest::a id {expires 0}
+    set store [::storetest::interleave {
+        $::storetest::client put_item $::storetest::table [::tsession::dynamodb::item $::storetest::a id [::storetest::data] {} 1]
+    } delete_item]
+    list [::tsession::dynamodb::prune $store] [expr {[::tsession::dynamodb::get $store id] ne {}}]
+} -result {0 1}
+
+test store-13 {service errors propagate rather than looking like missing sessions} -constraints backend -setup {::storetest::setup} -body {
+    set store [dict replace $::storetest::a table missing-[clock microseconds]]
+    list [catch {::tsession::dynamodb::get $store id}] [catch {::tsession::dynamodb::delete $store id}] \
+        [catch {::tsession::dynamodb::insert $store id [::storetest::data]}] [catch {::tsession::dynamodb::revoke $store alice}]
+} -result {1 1 1 1}
+
+if {[testConstraint backend]} {
+    $::storetest::client delete_table $::storetest::table
+    $::storetest::client destroy
+}
+cleanupTests

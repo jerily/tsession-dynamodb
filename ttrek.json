@@ -1,14 +1,13 @@
 {
   "name": "tsession-dynamodb",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "scripts": {
-    "localstack-deploy-infra": "awslocal cloudformation deploy --template-file $PROJECT_HOME/infra/infra.yml --stack-name MyStack"
+    "localstack-deploy-infra": "awslocal cloudformation deploy --template-file $PROJECT_HOME/infra/infra.yml --stack-name SessionsV2Stack"
   },
   "dependencies": {
-    "aws-sdk-tcl": "^1.0.10",
-    "tsession": "^1.0.3"
+    "tcl": ">=8.6.14",
+    "aws-sdk-tcl-dynamodb": "^1.0.18",
+    "tsession": "^2.0.0"
   },
-  "devDependencies": {
-
-  }
+  "devDependencies": {}
 }
